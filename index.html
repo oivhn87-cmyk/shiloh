@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ポップコーン・サバイバル (チャット付き)</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        * { touch-action: none; user-select: none; box-sizing: border-box; }
+        body { margin: 0; padding: 0; background-color: #1a0f07; color: #fff; font-family: sans-serif; overflow: hidden; text-align: center; }
+        
+        #ui-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            background: rgba(0,0,0,0.85); z-index: 10; padding: 20px;
+        }
+        .btn {
+            background: #f39c12; color: #fff; border: none; padding: 12px 24px;
+            font-size: 16px; font-weight: bold; border-radius: 30px; margin: 8px; cursor: pointer;
+            box-shadow: 0 4px 0 #d35400;
+        }
+        .btn:active { transform: translateY(3px); box-shadow: none; }
+        
+        .skin-container { display: flex; gap: 10px; margin: 15px 0; }
+        .skin-card {
+            border: 2px solid #555; background: #222; border-radius: 10px; padding: 10px; width: 95px;
+            cursor: pointer; transition: 0.2s;
+        }
+        .skin-card.selected { border-color: #f1c40f; background: #443000; transform: scale(1.05); }
+        .skin-card div { font-size: 24px; margin-bottom: 5px; }
+        .skin-card span { font-size: 11px; color: #ccc; display: block; }
+
+        #skill-btn {
+            position: absolute; bottom: 30px; right: 30px; width: 70px; height: 70px;
+            background: #3498db; border: 3px solid #fff; border-radius: 50%; color: #fff;
+            font-weight: bold; font-size: 14px; z-index: 8; display: none;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+        }
+
+        #share-url {
+            width: 80%; max-width: 350px; padding: 8px; font-size: 12px;
+            background: #333; color: #fff; border: 1px solid #555; border-radius: 5px; margin-top: 5px;
+        }
+        #game-info {
+            position: absolute; top: 10px; left: 10px; z-index: 5; text-align: left;
+            font-size: 13px; background: rgba(0,0,0,0.6); padding: 8px 12px; border-radius: 8px;
+        }
+
+        /* チャットエリアUI */
+        #chat-box {
+            position: absolute; bottom: 10px; left: 10px; width: 260px; height: 160px;
+            background: rgba(0, 0, 0, 0.6); border-radius: 8px; padding: 8px;
+            display: flex; flex-direction: column; z-index: 9;
+            touch-action: auto; user-select: auto;
+        }
+        #chat-messages {
+            flex: 1; overflow-y: auto; text-align: left; font-size: 12px;
+            margin-bottom: 5px; word-break: break-all;
+        }
+        #chat-messages div { margin-bottom: 4px; }
+        #chat-input-area { display: flex; gap: 5px; }
+        #chat-input {
+            flex: 1; background: #222; border: 1px solid #555; color: #fff;
+            padding: 5px 8px; border-radius: 4px; font-size: 12px;
+        }
+        #chat-send {
+            background: #f39c12; border: none; color: #fff; font-weight: bold;
+            padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;
+        }
+
+        /* 順位表示ボード */
+        #ranking-board {
+            background: #222; border: 2px solid #f1c40f; border-radius: 12px;
+            padding: 15px; margin-top: 15px; width: 280px; max-height: 200px; overflow-y: auto;
+        }
+        .rank-item { display: flex; justify-content: space-between; padding: 5px 10px; border-bottom: 1px solid #444; font-size: 14px; }
+        .rank-item:first-child { color: #f1c40f; font-weight: bold; font-size: 16px; }
+
+        #canvas { display: block; width: 100vw; height: 100vh; background: #2c1a0e; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <h2 id="menu-title" style="color: #f1c40f; margin: 0;">ポップコーン・バトロワ</h2>
+        <p id="menu-sub" style="color: #ccc; font-size: 12px; margin: 5px 0 15px;">キャラを選択して60秒間生き残れ！</p>
+        
+        <div class="skin-container" id="skin-select-box">
+            <div class="skin-card selected" onclick="selectSkin('SHIELD')" id="skin-SHIELD">
+                <div>🛡️</div>
+                <b>バリア型</b>
+                <span>スペース/ボタンで1秒バリア</span>
+            </div>
+            <div class="skin-card" onclick="selectSkin('HEAL')" id="skin-HEAL">
+                <div>💚</div>
+                <b>回復型</b>
+                <span>HP+1 (1回被弾に耐える)</span>
+            </div>
+            <div class="skin-card" onclick="selectSkin('MAGNET')" id="skin-MAGNET">
+                <div>🧲</div>
+                <b>キャッチ</b>
+                <span>周囲の弾を消去するオーラ</span>
+            </div>
+        </div>
+
+        <div id="host-controls">
+            <button class="btn" onclick="copyInviteLink()">招待リンクをコピー</button><br>
+            <input type="text" id="share-url" readonly><br><br>
+            <button class="btn" style="background:#27ae60; box-shadow:0 4px 0 #219150;" onclick="startGame()">全員でゲーム開始！</button>
+        </div>
+
+        <div id="client-wait" style="display: none;">
+            <p style="font-size: 16px; color: #f39c12;">ホストがゲームを開始するのを待っています...</p>
+        </div>
+
+        <div id="result-box" style="display: none;">
+            <h3 style="color: #f1c40f; margin: 5px 0;">🏆 最終順位 🏆</h3>
+            <div id="ranking-board"></div>
+            <button class="btn" onclick="location.reload()" style="margin-top: 15px;">もう一度遊ぶ</button>
+        </div>
+    </div>
+
+    <div id="chat-box">
+        <div id="chat-messages"></div>
+        <div id="chat-input-area">
+            <input type="text" id="chat-input" placeholder="チャットを入力..." maxlength="40">
+            <button id="chat-send" onclick="sendChatMessage()">送信</button>
+        </div>
+    </div>
+
+    <button id="skill-btn" onclick="triggerSkill()">SKILL</button>
+
+    <div id="game-info">
+        制限時間: <span id="timer-text" style="color: #f1c40f; font-weight: bold;">60</span>秒<br>
+        生存: <span id="player-count">1</span>名 | 状態: <span id="status-text" style="color: #f1c40f;">待機中</span>
+    </div>
+
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        let width, height;
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // ネットワーク情報
+        let peer = null, connections = [], hostConn = null;
+        let isHost = true, myId = '', roomId = '';
+
+        // ゲーム状態
+        let gameState = 'WAITING';
+        let players = {}, bullets = [];
+        let keys = {}, touchPos = null;
+        let selectedSkin = 'SHIELD';
+        
+        // タイマー・順位管理
+        const GAME_DURATION = 60;
+        let timeLeft = GAME_DURATION;
+        let gameTimerInterval = null, bulletSpawnInterval = null;
+        let rankings = [];
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const joinRoomId = urlParams.get('room');
+
+        if (joinRoomId) {
+            isHost = false;
+            roomId = joinRoomId;
+            document.getElementById('host-controls').style.display = 'none';
+            document.getElementById('client-wait').style.display = 'block';
+            initPeer();
+        } else {
+            isHost = true;
+            initPeer();
+        }
+
+        function selectSkin(type) {
+            selectedSkin = type;
+            document.querySelectorAll('.skin-card').forEach(el => el.classList.remove('selected'));
+            document.getElementById('skin-' + type).classList.add('selected');
+            if (players[myId]) players[myId].skin = type;
+        }
+
+        function initPeer() {
+            peer = new Peer();
+
+            peer.on('open', (id) => {
+                myId = id;
+                if (isHost) {
+                    roomId = id;
+                    document.getElementById('share-url').value = window.location.origin + window.location.pathname + '?room=' + roomId;
+                    players[myId] = createPlayer(myId, selectedSkin, "P1(ホスト)");
+                } else {
+                    hostConn = peer.connect(roomId);
+                    setupClientConnection();
+                }
+            });
+
+            if (isHost) {
+                peer.on('connection', (conn) => {
+                    connections.push(conn);
+                    const newId = conn.peer;
+
+                    conn.on('open', () => {
+                        const pNum = Object.keys(players).length + 1;
+                        players[newId] = createPlayer(newId, 'SHIELD', `P${pNum}`);
+                        broadcastGameState();
+                    });
+
+                    conn.on('data', (data) => {
+                        if (data.type === 'INPUT' && players[newId]) {
+                            players[newId].x = data.x;
+                            players[newId].y = data.y;
+                            players[newId].skin = data.skin;
+                            if (data.useSkill) activateShield(players[newId]);
+                        } else if (data.type === 'CHAT') {
+                            // クライアントからのチャットメッセージを全全員に転送
+                            broadcastChatMessage(data.sender, data.text);
+                        }
+                    });
+
+                    conn.on('close', () => {
+                        delete players[newId];
+                        connections = connections.filter(c => c !== conn);
+                        broadcastGameState();
+                    });
+                });
+            }
+        }
+
+        function setupClientConnection() {
+            hostConn.on('data', (data) => {
+                if (data.type === 'SYNC') {
+                    players = data.players;
+                    bullets = data.bullets;
+                    gameState = data.gameState;
+                    timeLeft = data.timeLeft;
+                    rankings = data.rankings || [];
+
+                    if (gameState === 'PLAYING') {
+                        document.getElementById('ui-layer').style.display = 'none';
+                        if (selectedSkin === 'SHIELD') document.getElementById('skill-btn').style.display = 'block';
+                    } else if (gameState === 'GAMEOVER') {
+                        showResults();
+                    }
+                    updateInfo();
+                } else if (data.type === 'CHAT_MSG') {
+                    addChatMessage(data.sender, data.text);
+                }
+            });
+        }
+
+        function createPlayer(id, skin, name) {
+            return {
+                id: id, name: name,
+                x: width / 2 + (Math.random() - 0.5) * 100,
+                y: height / 2 + (Math.random() - 0.5) * 100,
+                r: 15, hp: skin === 'HEAL' ? 2 : 1,
+                skin: skin, alive: true,
+                isShielding: false, shieldCd: 0, survivedTime: 0
+            };
+        }
+
+        // チャット送信処理
+        function sendChatMessage() {
+            const input = document.getElementById('chat-input');
+            const text = input.value.trim();
+            if (!text) return;
+
+            const myName = players[myId] ? players[myId].name : 'Me';
+
+            if (isHost) {
+                broadcastChatMessage(myName, text);
+            } else if (hostConn && hostConn.open) {
+                hostConn.send({ type: 'CHAT', sender: myName, text: text });
+            }
+
+            input.value = '';
+        }
+
+        function broadcastChatMessage(sender, text) {
+            addChatMessage(sender, text);
+            if (isHost) {
+                connections.forEach(conn => {
+                    if (conn.open) conn.send({ type: 'CHAT_MSG', sender, text });
+                });
+            }
+        }
+
+        function addChatMessage(sender, text) {
+            const box = document.getElementById('chat-messages');
+            const msgEl = document.createElement('div');
+            msgEl.innerHTML = `<b style="color:#f1c40f">${sender}:</b> ${escapeHtml(text)}`;
+            box.appendChild(msgEl);
+            box.scrollTop = box.scrollHeight;
+        }
+
+        function escapeHtml(str) {
+            return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        }
+
+        // 入力フォームでのスペース移動暴発を防止
+        document.getElementById('chat-input').addEventListener('keydown', e => {
+            e.stopPropagation();
+            if (e.key === 'Enter') sendChatMessage();
+        });
+
+        function triggerSkill() {
+            if (players[myId] && selectedSkin === 'SHIELD') activateShield(players[myId]);
+        }
+
+        function activateShield(player) {
+            if (player.shieldCd <= 0) {
+                player.isShielding = true;
+                player.shieldCd = 180;
+                setTimeout(() => player.isShielding = false, 1000);
+            }
+        }
+
+        function copyInviteLink() {
+            const input = document.getElementById('share-url');
+            input.select();
+            document.execCommand('copy');
+            alert('招待リンクをコピーしました！');
+        }
+
+        function startGame() {
+            if (!isHost) return;
+            gameState = 'PLAYING';
+            timeLeft = GAME_DURATION;
+            rankings = [];
+            document.getElementById('ui-layer').style.display = 'none';
+            if (selectedSkin === 'SHIELD') document.getElementById('skill-btn').style.display = 'block';
+            
+            if (players[myId]) players[myId].skin = selectedSkin;
+
+            gameTimerInterval = setInterval(() => {
+                if (gameState === 'PLAYING') {
+                    timeLeft--;
+                    Object.values(players).forEach(p => { if (p.alive) p.survivedTime++; });
+                    if (timeLeft <= 0) endGame();
+                }
+            }, 1000);
+
+            bulletSpawnInterval = setInterval(() => {
+                if (gameState === 'PLAYING') {
+                    bullets.push({
+                        x: Math.random() * width, y: -10,
+                        vx: (Math.random() - 0.5) * 4, vy: Math.random() * 3 + 3, r: 10
+                    });
+                }
+            }, 100);
+
+            broadcastGameState();
+        }
+
+        function endGame() {
+            gameState = 'GAMEOVER';
+            clearInterval(gameTimerInterval);
+            clearInterval(bulletSpawnInterval);
+
+            const playerList = Object.values(players);
+            playerList.sort((a, b) => b.survivedTime - a.survivedTime);
+            
+            rankings = playerList.map((p, index) => ({
+                rank: index + 1, name: p.name,
+                survivedTime: p.survivedTime, isWinner: index === 0
+            }));
+
+            showResults();
+            broadcastGameState();
+        }
+
+        function showResults() {
+            document.getElementById('ui-layer').style.display = 'flex';
+            document.getElementById('skin-select-box').style.display = 'none';
+            document.getElementById('host-controls').style.display = 'none';
+            document.getElementById('client-wait').style.display = 'none';
+            document.getElementById('menu-title').innerText = 'ゲーム終了！';
+            document.getElementById('menu-sub').innerText = '';
+            document.getElementById('skill-btn').style.display = 'none';
+
+            const board = document.getElementById('ranking-board');
+            board.innerHTML = '';
+            rankings.forEach(r => {
+                const item = document.createElement('div');
+                item.className = 'rank-item';
+                item.innerHTML = `<span>第${r.rank}位: ${r.name}</span><span>${r.survivedTime}秒生存</span>`;
+                board.appendChild(item);
+            });
+            document.getElementById('result-box').style.display = 'block';
+        }
+
+        // 入力制御
+        window.addEventListener('keydown', e => {
+            if (document.activeElement === document.getElementById('chat-input')) return;
+            keys[e.code] = true;
+            if (e.code === 'Space') triggerSkill();
+        });
+        window.addEventListener('keyup', e => keys[e.code] = false);
+
+        canvas.addEventListener('pointerdown', e => touchPos = { x: e.clientX, y: e.clientY });
+        canvas.addEventListener('pointermove', e => { if (touchPos) touchPos = { x: e.clientX, y: e.clientY }; });
+        canvas.addEventListener('pointerup', () => touchPos = null);
+
+        function handleInput() {
+            const myPlayer = players[myId];
+            if (!myPlayer || !myPlayer.alive) return;
+
+            let moved = false;
+            let useSkillNow = keys['Space'];
+            const speed = 6;
+
+            if (keys['ArrowLeft'] || keys['KeyA']) { myPlayer.x -= speed; moved = true; }
+            if (keys['ArrowRight'] || keys['KeyD']) { myPlayer.x += speed; moved = true; }
+            if (keys['ArrowUp'] || keys['KeyW']) { myPlayer.y -= speed; moved = true; }
+            if (keys['ArrowDown'] || keys['KeyS']) { myPlayer.y += speed; moved = true; }
+
+            if (touchPos) {
+                const dx = touchPos.x - myPlayer.x;
+                const dy = touchPos.y - myPlayer.y;
+                const dist = Math.hypot(dx, dy);
+                if (dist > 5) {
+                    myPlayer.x += (dx / dist) * speed;
+                    myPlayer.y += (dy / dist) * speed;
+                    moved = true;
+                }
+            }
+
+            myPlayer.x = Math.max(myPlayer.r, Math.min(width - myPlayer.r, myPlayer.x));
+            myPlayer.y = Math.max(myPlayer.r, Math.min(height - myPlayer.r, myPlayer.y));
+
+            if (!isHost && hostConn && hostConn.open) {
+                hostConn.send({
+                    type: 'INPUT', x: myPlayer.x, y: myPlayer.y,
+                    skin: selectedSkin, useSkill: useSkillNow
+                });
+            }
+        }
+
+        function broadcastGameState() {
+            if (!isHost) return;
+            const data = { type: 'SYNC', players, bullets, gameState, timeLeft, rankings };
+            connections.forEach(conn => { if (conn.open) conn.send(data); });
+            updateInfo();
+        }
+
+        function updateInfo() {
+            const aliveCount = Object.values(players).filter(p => p.alive).length;
+            document.getElementById('player-count').innerText = aliveCount;
+            document.getElementById('timer-text').innerText = timeLeft;
+            document.getElementById('status-text').innerText = gameState === 'PLAYING' ? '戦闘中' : (gameState === 'GAMEOVER' ? '終了' : '待機中');
+        }
+
+        function loop() {
+            handleInput();
+
+            if (isHost && gameState === 'PLAYING') {
+                bullets.forEach((b, bIdx) => {
+                    b.x += b.vx;
+                    b.y += b.vy;
+
+                    Object.values(players).forEach(p => {
+                        if (p.alive) {
+                            if (p.shieldCd > 0) p.shieldCd--;
+
+                            if (p.skin === 'MAGNET') {
+                                const magDist = Math.hypot(p.x - b.x, p.y - b.y);
+                                if (magDist < p.r + 30) {
+                                    bullets.splice(bIdx, 1);
+                                    return;
+                                }
+                            }
+
+                            const dist = Math.hypot(p.x - b.x, p.y - b.y);
+                            if (dist < p.r + b.r) {
+                                if (p.isShielding) {
+                                    bullets.splice(bIdx, 1);
+                                } else {
+                                    p.hp--;
+                                    bullets.splice(bIdx, 1);
+                                    if (p.hp <= 0) p.alive = false;
+                                }
+                            }
+                        }
+                    });
+                });
+
+                const aliveCount = Object.values(players).filter(p => p.alive).length;
+                if (aliveCount === 0 && Object.keys(players).length > 0) {
+                    endGame();
+                }
+
+                bullets = bullets.filter(b => b.y < height + 20);
+                broadcastGameState();
+            }
+
+            // --- 描画 ---
+            ctx.clearRect(0, 0, width, height);
+
+            ctx.fillStyle = '#f1c40f';
+            bullets.forEach(b => {
+                ctx.beginPath();
+                ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            Object.values(players).forEach(p => {
+                ctx.beginPath();
+                if (p.alive) {
+                    if (p.skin === 'SHIELD') ctx.fillStyle = '#3498db';
+                    else if (p.skin === 'HEAL') ctx.fillStyle = p.hp > 1 ? '#2ecc71' : '#e74c3c';
+                    else if (p.skin === 'MAGNET') ctx.fillStyle = '#9b59b6';
+
+                    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    if (p.skin === 'MAGNET') {
+                        ctx.beginPath();
+                        ctx.strokeStyle = 'rgba(155, 89, 182, 0.4)';
+                        ctx.lineWidth = 2;
+                        ctx.arc(p.x, p.y, p.r + 30, 0, Math.PI * 2);
+                        ctx.stroke();
+                    }
+
+                    if (p.isShielding) {
+                        ctx.beginPath();
+                        ctx.strokeStyle = '#00ffff';
+                        ctx.lineWidth = 4;
+                        ctx.arc(p.x, p.y, p.r + 8, 0, Math.PI * 2);
+                        ctx.stroke();
+                    }
+                } else {
+                    ctx.fillStyle = '#ffffff';
+                    ctx.arc(p.x, p.y, p.r + 5, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            });
+
+            requestAnimationFrame(loop);
+        }
+
+        loop();
+    </script>
+</body>
+</html>
